@@ -24,8 +24,9 @@ import android.bluetooth.BluetoothManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.media.MediaRecorder;
+import android.hardware.Camera;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.view.LayoutInflater;
 import android.view.Menu;
@@ -39,47 +40,44 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
-
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 /**
  * Activity for scanning and displaying available Bluetooth LE devices.
  */
-public class DeviceScanActivity extends ListActivity {
+public class DeviceScanActivity extends ListActivity implements SurfaceHolder.Callback{
     private LeDeviceListAdapter mLeDeviceListAdapter;
     private BluetoothAdapter mBluetoothAdapter;
     private boolean mScanning;
     private Handler mHandler;
-    private FileOutputStream logFile;
+    private FileOutputStream logFileOutput;
+    private File logFile;
     private static final int REQUEST_ENABLE_BT = 1;
     // Stops scanning after 10 seconds.
     private static final long SCAN_PERIOD = 10000;
-    private MediaRecorder mrec;
-    private FileOutputStream videoFile;
+
+    public static SurfaceView mSurfaceView;
+    public static SurfaceHolder mSurfaceHolder;
+    public static Camera mCamera;
+    public static boolean mPreviewRunning;
+
+    public void createSurface()
+    {
+        mSurfaceView = (SurfaceView) findViewById(R.id.surfaceView1);
+        mSurfaceHolder = mSurfaceView.getHolder();
+        mSurfaceHolder.addCallback(this);
+        mSurfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+        createSurface();
         getActionBar().setTitle(R.string.title_devices);
         mHandler = new Handler();
-        try{
-            logFile = openFileOutput(getFilesDir() + "/BLE_Signal_Record" +  System.currentTimeMillis()+".dat", Context.MODE_PRIVATE);
-            videoFile = openFileOutput(getFilesDir() + "/BLE_Video_Record" +  System.currentTimeMillis()+".mp4", Context.MODE_PRIVATE);
-        }
-        catch(Exception e)
-        {
-
-        }
-        mrec.setVideoSource(MediaRecorder.VideoSource.CAMERA);
-        mrec.setVideoEncoder(MediaRecorder.VideoEncoder.MPEG_4_SP);
-        mrec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-        try{
-
-
-        mrec.setOutputFile(videoFile.getFD());
-        }
-        catch(Exception e)
-        {
-
-        }
         // Use this check to determine whether BLE is supported on the device.  Then you can
         // selectively disable BLE-related features.
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
@@ -147,7 +145,7 @@ public class DeviceScanActivity extends ListActivity {
         // Initializes list view adapter.
         mLeDeviceListAdapter = new LeDeviceListAdapter();
         setListAdapter(mLeDeviceListAdapter);
-        scanLeDevice(true);
+        //scanLeDevice(true);
     }
 
     @Override
@@ -163,7 +161,7 @@ public class DeviceScanActivity extends ListActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        scanLeDevice(false);
+        //scanLeDevice(false);
         mLeDeviceListAdapter.clear();
     }
 
@@ -175,42 +173,97 @@ public class DeviceScanActivity extends ListActivity {
         intent.putExtra(DeviceControlActivity.EXTRAS_DEVICE_NAME, device.getName());
         intent.putExtra(DeviceControlActivity.EXTRAS_DEVICE_ADDRESS, device.getAddress());
         if (mScanning) {
+            System.err.println("Stopping scan callback\n");
+
             mBluetoothAdapter.stopLeScan(mLeScanCallback);
             mScanning = false;
         }
         startActivity(intent);
     }
 
+    private void openScanFiles(){
+        try{
+
+            String externalFilesDir = new String(Environment.DIRECTORY_DOWNLOADS);
+            logFile = new File(getExternalFilesDir(externalFilesDir),"BLE_Signal_Record_" +  System.currentTimeMillis()+".txt");
+            logFileOutput  = new FileOutputStream(logFile);
+
+            System.err.println("Print to dir: " + logFile.getAbsolutePath());
+
+        }
+        catch(IOException e)
+        {
+            System.err.println("Failed to open video or signal record file");
+            System.exit(-1);
+        }
+    }
+
+    private void stopRecording(){
+
+        if(!mScanning)
+            return;
+        try {
+            logFileOutput.close();
+        }
+        catch(Exception e)
+        {
+            System.err.println("stopRecording: logFile and videoFile are closed\n");
+        }
+
+    }
+
+
+
+
+    private void stopScanning()
+    {
+        if(!mScanning)
+            return;
+        stopService(new Intent(DeviceScanActivity.this, RecorderService.class));
+
+
+        mScanning = false;
+        mBluetoothAdapter.stopLeScan(mLeScanCallback);
+        stopRecording();
+        invalidateOptionsMenu();
+    }
+
+
+    void startScanning()
+    {
+        openScanFiles();
+        Intent intent = new Intent(DeviceScanActivity.this, RecorderService.class);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+        startService(intent);
+        //finish();
+        mScanning=true;
+        mBluetoothAdapter.startLeScan(mLeScanCallback);
+
+    }
+
+
     private void scanLeDevice(final boolean enable) {
+
+
+
         if (enable) {
             // Stops scanning after a pre-defined scan period.
             mHandler.postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    mScanning = false;
-                    mBluetoothAdapter.stopLeScan(mLeScanCallback);
-                    invalidateOptionsMenu();
+                    stopScanning();
+                    }
                 }
-            }, SCAN_PERIOD);
+                ,SCAN_PERIOD);
+                startScanning();
 
-            mScanning = true;
-            mBluetoothAdapter.startLeScan(mLeScanCallback);
-            try
-            {
-            mrec.prepare();
-            }
-            catch(Exception e)
-            {
+            }else {
 
-            }
-            mrec.start();
+            stopScanning();
 
-        } else {
-            mScanning = false;
-            mBluetoothAdapter.stopLeScan(mLeScanCallback);
-            mrec.stop();
         }
-        invalidateOptionsMenu();
+
     }
 
     // Adapter for holding devices found through scanning.
@@ -284,31 +337,51 @@ public class DeviceScanActivity extends ListActivity {
             new BluetoothAdapter.LeScanCallback() {
 
         @Override
-        public void onLeScan(final BluetoothDevice device, int rssi, final byte[] scanRecord) {
+        public void onLeScan(final BluetoothDevice device, final int rssi, final byte[] scanRecord) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
                     mLeDeviceListAdapter.addDevice(device);
                     mLeDeviceListAdapter.notifyDataSetChanged();
                     long currTime = System.currentTimeMillis();
-                    String currTimeString = String.valueOf(currTime);
+                    String currTimeString = String.valueOf(currTime) + ": " + String.valueOf(rssi) +" ";
 
                     try{
-                    logFile.write(currTimeString.getBytes());
-                    logFile.write(scanRecord);
-                    logFile.write("\n".getBytes());
+                    logFileOutput.write(currTimeString.getBytes());
+                    logFileOutput.write(scanRecord);
+                    logFileOutput.write("\n".getBytes());
                     }
                     catch(Exception e)
                     {
-
+                        System.err.println("mLeScanCallback: Failed to write logFile\n");
                     }
                 }
             });
         }
-    };
+     };
 
     static class ViewHolder {
         TextView deviceName;
         TextView deviceAddress;
     }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int weight,
+                               int height) {
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        // TODO Auto-generated method stub
+
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        // TODO Auto-generated method stub
+
+    }
 }
+
+
+
